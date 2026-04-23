@@ -11,24 +11,20 @@ import os
 from functools import wraps
 
 app = Flask(__name__)
-CORS(app, origins=["https://data-cleaning-website.vercel.app"],
+
+# CORS Configuration
+CORS(app, 
+     origins=["https://data-cleaning-website.vercel.app"],
      allow_headers=["Content-Type", "Authorization"],
      methods=["GET", "POST", "OPTIONS"],
      supports_credentials=True)
 
-@app.after_request
-def after_request(response):
-    response.headers['Access-Control-Allow-Origin'] = 'https://data-cleaning-website.vercel.app'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    return response
-
 # CONFIG
 app.config["MONGO_URI"] = os.environ.get("MONGO_URI", "mongodb://localhost:27017/datacleaner")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "your_secret_key_change_this")
-
 mongo = PyMongo(app)
 user_dfs = {}
+
 
 # JWT DECORATOR
 def token_required(f):
