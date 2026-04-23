@@ -11,7 +11,14 @@ import os
 from functools import wraps
 
 app = Flask(__name__)
-CORS(app, origins="*")
+CORS(app, resources={r"/api/*": {"origins": "*", "allow_headers": ["Content-Type", "Authorization"], "methods": ["GET", "POST", "OPTIONS"]}})
+
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    return response
 
 # ─── CONFIG ───────────────────────────────────────────────
 app.config["MONGO_URI"] = os.environ.get("MONGO_URI", "mongodb://localhost:27017/datacleaner")
@@ -168,7 +175,7 @@ def form_input(user_id):
         return jsonify({"error": str(e)}), 500
 
 
-# ─── CLEANING LOGIC ───────────────────────────────────────
+
 
 def clean_dataset(options, df):
     for col in df.columns:
