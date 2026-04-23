@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, send_file, make_response
-from flask_cors import CORS
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
@@ -12,21 +11,34 @@ from functools import wraps
 
 app = Flask(__name__)
 
-# CORS Configuration
-CORS(app, 
-     origins=["https://data-cleaning-website.vercel.app"],
-     allow_headers=["Content-Type", "Authorization"],
-     methods=["GET", "POST", "OPTIONS"],
-     supports_credentials=True)
+# ── CORS (manual, most reliable) ──────────────────────────────────────────────
+ALLOWED_ORIGIN = "https://data-cleaning-website.vercel.app"
 
-# CONFIG
-app.config["MONGO_URI"] = os.environ.get("MONGO_URI", "mongodb://localhost:27017/datacleaner")
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"]      = ALLOWED_ORIGIN
+    response.headers["Access-Control-Allow-Headers"]     = "Content-Type, Authorization"
+    response.headers["Access-Control-Allow-Methods"]     = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
+
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        resp = make_response()
+        resp.headers["Access-Control-Allow-Origin"]      = ALLOWED_ORIGIN
+        resp.headers["Access-Control-Allow-Headers"]     = "Content-Type, Authorization"
+        resp.headers["Access-Control-Allow-Methods"]     = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Credentials"] = "true"
+        return resp, 200
+
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+app.config["MONGO_URI"]  = os.environ.get("MONGO_URI", "mongodb://localhost:27017/datacleaner")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "your_secret_key_change_this")
-mongo = PyMongo(app)
+mongo    = PyMongo(app)
 user_dfs = {}
 
-
-# JWT DECORATOR
+# ── JWT DECORATOR ─────────────────────────────────────────────────────────────
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -42,12 +54,10 @@ def token_required(f):
         return f(data["user_id"], *args, **kwargs)
     return decorated
 
-# AUTH ROUTES
-@app.route("/api/signup", methods=["POST", "OPTIONS"])
+# ── AUTH ROUTES ───────────────────────────────────────────────────────────────
+@app.route("/api/signup", methods=["POST"])
 def signup():
-    if request.method == "OPTIONS":
-        return make_response(), 200
-    data = request.get_json()
+    data     = request.get_json()
     name     = data.get("name", "").strip()
     email    = data.get("email", "").strip().lower()
     password = data.get("password", "")
@@ -59,10 +69,8 @@ def signup():
     mongo.db.users.insert_one({"name": name, "email": email, "password": hashed})
     return jsonify({"message": "Account created successfully"}), 201
 
-@app.route("/api/login", methods=["POST", "OPTIONS"])
+@app.route("/api/login", methods=["POST"])
 def login():
-    if request.method == "OPTIONS":
-        return make_response(), 200
     data     = request.get_json()
     email    = data.get("email", "").strip().lower()
     password = data.get("password", "")
@@ -75,14 +83,14 @@ def login():
     )
     return jsonify({"token": token, "name": user["name"]}), 200
 
-# FILE UPLOAD
-@app.route("/api/file", methods=["POST", "OPTIONS"])
+# ── FILE UPLOAD ───────────────────────────────────────────────────────────────
+@app.route("/api/file", methods=["POST"])
 @token_required
 def upload_file(user_id):
     try:
         if "file" not in request.files:
             return jsonify({"error": "No file provided"}), 400
-        file = request.files["file"]
+        file  = request.files["file"]
         fname = file.filename.lower()
         if fname.endswith(".csv"):
             df = pd.read_csv(file)
@@ -105,8 +113,8 @@ def upload_file(user_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# CLEAN & DOWNLOAD
-@app.route("/api/inputs", methods=["POST", "OPTIONS"])
+# ── CLEAN & DOWNLOAD ──────────────────────────────────────────────────────────
+@app.route("/api/inputs", methods=["POST"])
 @token_required
 def form_input(user_id):
     try:
@@ -146,6 +154,7 @@ def form_input(user_id):
         print("Error:", e)
         return jsonify({"error": str(e)}), 500
 
+# ── CLEAN LOGIC ───────────────────────────────────────────────────────────────
 def clean_dataset(options, df):
     for col in df.columns:
         if col not in options:
@@ -166,8 +175,8 @@ def clean_dataset(options, df):
         elif dtype == "categorical":
             cats, handle = rest
             df[col] = df[col].astype(str).str.lower().str.strip()
-            cats = [c.lower() for c in cats]
-            df[col] = pd.Categorical(df[col], categories=cats)
+            cats     = [c.lower() for c in cats]
+            df[col]  = pd.Categorical(df[col], categories=cats)
             if handle == "remove":
                 df = df[df[col].notna()]
             elif handle == "mode":
