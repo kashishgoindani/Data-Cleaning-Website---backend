@@ -11,11 +11,11 @@ import os
 from functools import wraps
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins="*")
 
 # ─── CONFIG ───────────────────────────────────────────────
-app.config["MONGO_URI"] = "mongodb://localhost:27017/datacleaner"
-app.config["SECRET_KEY"] = "your_secret_key_change_this"   # change in production!
+app.config["MONGO_URI"] = os.environ.get("MONGO_URI", "mongodb://localhost:27017/datacleaner")
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "your_secret_key_change_this")
 
 mongo = PyMongo(app)
 
