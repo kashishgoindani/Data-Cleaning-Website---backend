@@ -1,5 +1,4 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify, send_file, make_response
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
@@ -11,13 +10,22 @@ import os
 from functools import wraps
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*", "allow_headers": ["Content-Type", "Authorization"], "methods": ["GET", "POST", "OPTIONS"]}})
+
+# ─── MANUAL CORS ──────────────────────────────────────────
+@app.before_request
+def handle_preflight():
+    if request.method == "OPTIONS":
+        res = make_response()
+        res.headers['Access-Control-Allow-Origin'] = '*'
+        res.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+        res.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return res
 
 @app.after_request
 def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
     return response
 
 # ─── CONFIG ───────────────────────────────────────────────
@@ -26,7 +34,6 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "your_secret_key_change_
 
 mongo = PyMongo(app)
 
-# Per-user in-memory DataFrame store  { user_id_str : df }
 user_dfs = {}
 
 # ─── JWT DECORATOR ────────────────────────────────────────
@@ -47,8 +54,10 @@ def token_required(f):
 
 # ─── AUTH ROUTES ──────────────────────────────────────────
 
-@app.route("/api/signup", methods=["POST"])
+@app.route("/api/signup", methods=["POST", "OPTIONS"])
 def signup():
+    if request.method == "OPTIONS":
+        return make_response(), 200
     data = request.get_json()
     name     = data.get("name", "").strip()
     email    = data.get("email", "").strip().lower()
@@ -65,8 +74,10 @@ def signup():
     return jsonify({"message": "Account created successfully"}), 201
 
 
-@app.route("/api/login", methods=["POST"])
+@app.route("/api/login", methods=["POST", "OPTIONS"])
 def login():
+    if request.method == "OPTIONS":
+        return make_response(), 200
     data     = request.get_json()
     email    = data.get("email", "").strip().lower()
     password = data.get("password", "")
@@ -88,7 +99,7 @@ def login():
 
 # ─── FILE UPLOAD ──────────────────────────────────────────
 
-@app.route("/api/file", methods=["POST"])
+@app.route("/api/file", methods=["POST", "OPTIONS"])
 @token_required
 def upload_file(user_id):
     try:
@@ -107,7 +118,6 @@ def upload_file(user_id):
 
         user_dfs[user_id] = df
 
-        # Return column info with dtype hints
         col_info = []
         for col in df.columns:
             dtype = str(df[col].dtype)
@@ -127,7 +137,7 @@ def upload_file(user_id):
 
 # ─── CLEAN & DOWNLOAD ─────────────────────────────────────
 
-@app.route("/api/inputs", methods=["POST"])
+@app.route("/api/inputs", methods=["POST", "OPTIONS"])
 @token_required
 def form_input(user_id):
     try:
@@ -135,7 +145,6 @@ def form_input(user_id):
         if df is None:
             return jsonify({"error": "No file uploaded. Please upload a file first."}), 400
 
-        # Frontend sends JSON: { colName: { type, min, max, cats, handle }, ... }
         payload = request.get_json()
         if not payload:
             return jsonify({"error": "No configuration received"}), 400
@@ -175,7 +184,7 @@ def form_input(user_id):
         return jsonify({"error": str(e)}), 500
 
 
-
+# ─── CLEANING LOGIC ───────────────────────────────────────
 
 def clean_dataset(options, df):
     for col in df.columns:
