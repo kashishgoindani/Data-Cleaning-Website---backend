@@ -12,7 +12,7 @@ from functools import wraps
 app = Flask(__name__)
 
 # ── CORS (manual, most reliable) ──────────────────────────────────────────────
-ALLOWED_ORIGIN = "https://data-cleaning-website.vercel.app"
+ALLOWED_ORIGIN = "*"
 
 @app.after_request
 def add_cors_headers(response):
