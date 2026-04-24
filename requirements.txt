@@ -1,9 +1,9 @@
 flask
 flask-pymongo
 werkzeug
-pyjwt
 pandas
 numpy
 openpyxl
 xlrd
 gunicorn
+PyJWT>=2.0.0
