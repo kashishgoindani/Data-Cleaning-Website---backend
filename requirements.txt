@@ -7,3 +7,4 @@ openpyxl
 xlrd
 gunicorn
 PyJWT>=2.0.0
+python-dotenv
