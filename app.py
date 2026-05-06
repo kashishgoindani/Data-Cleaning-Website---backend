@@ -1,3 +1,9 @@
+from dotenv import load_dotenv
+import os
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+
+print("MONGO_URI:", os.environ.get("MONGO_URI"))
+
 from flask import Flask, request, jsonify, send_file, make_response
 from flask_pymongo import PyMongo
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -6,14 +12,12 @@ import datetime
 import pandas as pd
 import numpy as np
 import io
-import os
+import re
 from functools import wraps
 
 app = Flask(__name__)
 
-# ── CORS (manual, most reliable) ──────────────────────────────────────────────
-# NAYA
-ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "https://data-cleaning-website.vercel.app")
+ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "http://localhost:3000")
 
 @app.after_request
 def add_cors_headers(response):
@@ -33,13 +37,11 @@ def handle_preflight():
         resp.headers["Access-Control-Allow-Credentials"] = "true"
         return resp, 200
 
-# ── CONFIG ────────────────────────────────────────────────────────────────────
 app.config["MONGO_URI"]  = os.environ.get("MONGO_URI", "mongodb://localhost:27017/datacleaner")
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "your_secret_key_change_this")
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "mysecretkey123")
 mongo    = PyMongo(app)
 user_dfs = {}
 
-# ── JWT DECORATOR ─────────────────────────────────────────────────────────────
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -55,7 +57,6 @@ def token_required(f):
         return f(data["user_id"], *args, **kwargs)
     return decorated
 
-# ── AUTH ROUTES ───────────────────────────────────────────────────────────────
 @app.route("/api/signup", methods=["POST"])
 def signup():
     data     = request.get_json()
@@ -64,6 +65,8 @@ def signup():
     password = data.get("password", "")
     if not name or not email or not password:
         return jsonify({"error": "All fields required"}), 400
+    if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+        return jsonify({"error": "Please enter a valid email address"}), 400
     if mongo.db.users.find_one({"email": email}):
         return jsonify({"error": "Email already registered"}), 409
     hashed = generate_password_hash(password)
@@ -84,7 +87,24 @@ def login():
     )
     return jsonify({"token": token, "name": user["name"]}), 200
 
-# ── FILE UPLOAD ───────────────────────────────────────────────────────────────
+def suggest_col_type(col_name, series):
+    name = col_name.lower().strip()
+    date_keywords = ["date", "time", "day", "month", "year", "dob", "birthday", "created", "updated"]
+    if any(k in name for k in date_keywords):
+        return "date"
+    clean = series.astype(str).str.strip()
+    clean = clean[~clean.str.lower().isin(["na", "nan", "missing", "null", "none", ""])]
+    if len(clean) == 0:
+        return "categorical"
+    numeric_clean = clean.str.extract(r'^([+-]?\d*\.?\d+)', expand=False)
+    numeric_ratio = numeric_clean.notna().sum() / len(clean)
+    if numeric_ratio >= 0.6:
+        return "numeric"
+    date_pattern = clean.str.match(r'^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$')
+    if date_pattern.sum() / len(clean) >= 0.6:
+        return "date"
+    return "categorical"
+
 @app.route("/api/file", methods=["POST"])
 @token_required
 def upload_file(user_id):
@@ -102,19 +122,12 @@ def upload_file(user_id):
         user_dfs[user_id] = df
         col_info = []
         for col in df.columns:
-            dtype = str(df[col].dtype)
-            if "int" in dtype or "float" in dtype:
-                suggested = "numeric"
-            elif "datetime" in dtype:
-                suggested = "date"
-            else:
-                suggested = "categorical"
+            suggested = suggest_col_type(col, df[col])
             col_info.append({"name": col, "suggested": suggested})
         return jsonify({"cols": col_info, "rows": len(df)}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ── CLEAN & DOWNLOAD ──────────────────────────────────────────────────────────
 @app.route("/api/inputs", methods=["POST"])
 @token_required
 def form_input(user_id):
@@ -155,7 +168,6 @@ def form_input(user_id):
         print("Error:", e)
         return jsonify({"error": str(e)}), 500
 
-# ── CLEAN LOGIC ───────────────────────────────────────────────────────────────
 def clean_dataset(options, df):
     for col in df.columns:
         if col not in options:
@@ -163,6 +175,7 @@ def clean_dataset(options, df):
         dtype, *rest = options[col]
         if dtype == "numeric":
             bounds, handle = rest
+            df[col] = df[col].astype(str).str.extract(r'([+-]?\d*\.?\d+)')[0]
             df[col] = pd.to_numeric(df[col], errors="coerce")
             df.loc[(df[col] < bounds[0]) | (df[col] > bounds[1]), col] = np.nan
             if handle == "remove":
@@ -176,19 +189,24 @@ def clean_dataset(options, df):
         elif dtype == "categorical":
             cats, handle = rest
             df[col] = df[col].astype(str).str.lower().str.strip()
-            cats     = [c.lower() for c in cats]
-            df[col]  = pd.Categorical(df[col], categories=cats)
+            df[col] = df[col].replace(["na", "nan", "missing", "null", "none", ""], np.nan)
+            cats = [c.lower() for c in cats]
+            df.loc[~df[col].isin(cats + [np.nan]), col] = np.nan
             if handle == "remove":
                 df = df[df[col].notna()]
             elif handle == "mode":
-                df[col] = df[col].fillna(df[col].mode()[0])
+                mode_val = df[col].mode()
+                if len(mode_val) > 0:
+                    df[col] = df[col].fillna(mode_val[0])
         elif dtype == "date":
             _, handle = rest
             df[col] = pd.to_datetime(df[col], errors="coerce")
             if handle == "remove":
                 df = df[df[col].notna()]
             elif handle == "mode":
-                df[col] = df[col].fillna(df[col].mode()[0])
+                mode_val = df[col].mode()
+                if len(mode_val) > 0:
+                    df[col] = df[col].fillna(mode_val[0])
     df = df.drop_duplicates().reset_index(drop=True)
     return df
 
